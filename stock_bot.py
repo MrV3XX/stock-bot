@@ -1,80 +1,65 @@
+import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
-import streamlit as st
 
-TICKERS = ['AAPL', 'MSFT', 'JNJ', 'KO', 'PG', 'PEP', 'XOM', 'V', 'MA', 'HD', 'NVDA']
-YEARS = 5
-VOLATILITY_THRESHOLD = 25
-MIN_CAGR = 5
-PE_RANGE = (10, 30)
+# List of stock tickers to analyze
+TICKERS = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA']  # Example tickers
 
-def get_stock_data(ticker, years=YEARS):
-    end = datetime.today()
-    start = end - timedelta(days=365 * years)
-    df = yf.download(ticker, start=start, end=end)
-    if df.empty:
-        return None
-    df['Return'] = df['Adj Close'].pct_change()
-    df['Cumulative'] = (1 + df['Return']).cumprod()
-    return df
-
-def get_cagr(df):
-    n = len(df) / 252
-    cagr = (df['Cumulative'].iloc[-1])**(1/n) - 1
-    return round(cagr * 100, 2)
-
-def get_volatility(df):
-    return round(df['Return'].std() * np.sqrt(252) * 100, 2)
-
-def get_max_drawdown(df):
-    cum_max = df['Cumulative'].cummax()
-    drawdown = (df['Cumulative'] - cum_max) / cum_max
-    return round(drawdown.min() * 100, 2)
-
-def get_pe_ratio(ticker):
+def get_stock_data(ticker):
     stock = yf.Ticker(ticker)
-    pe = stock.info.get('trailingPE', None)
-    return round(pe, 2) if pe else None
+    df = stock.history(period="5y")
+    
+    # Flatten MultiIndex columns if present
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [' '.join(col).strip() for col in df.columns.values]
+    
+    if 'Adj Close' not in df.columns:
+        st.error(f"'Adj Close' column missing for {ticker}")
+        return None
+    
+    df['Return'] = df['Adj Close'].pct_change()
+    return df
 
 def analyze_stock(ticker):
     df = get_stock_data(ticker)
-    if df is None:
-        return {'Ticker': ticker, 'Error': 'No Data'}
-    cagr = get_cagr(df)
-    vol = get_volatility(df)
-    mdd = get_max_drawdown(df)
-    pe = get_pe_ratio(ticker)
+    if df is None or df.empty:
+        return None
+    
+    # Calculate average annual return and volatility
+    avg_return = df['Return'].mean() * 252  # Approximate trading days per year
+    volatility = df['Return'].std() * np.sqrt(252)
+    
+    # Try to get P/E ratio from info
+    pe_ratio = None
+    try:
+        info = yf.Ticker(ticker).info
+        pe_ratio = info.get('trailingPE', None)
+    except Exception:
+        pe_ratio = None
+    
     return {
         'Ticker': ticker,
-        'CAGR (%)': cagr,
-        'Volatility (%)': vol,
-        'Max Drawdown (%)': mdd,
-        'P/E Ratio': pe
+        'Avg Annual Return': avg_return,
+        'Volatility': volatility,
+        'P/E Ratio': pe_ratio
     }
 
 def main():
     st.title("📈 Stock Market Trend Analyzer")
-    st.write(f"Analyzing {YEARS} years of data for selected stocks...")
+    st.write("Analyzing 5 years of data for selected stocks...")
+    
+    results = []
+    for ticker in TICKERS:
+        res = analyze_stock(ticker)
+        if res is not None:
+            results.append(res)
+    
+    if results:
+        df_results = pd.DataFrame(results)
+        st.dataframe(df_results)
+    else:
+        st.warning("No valid stock data found.")
 
-    results = [analyze_stock(ticker) for ticker in TICKERS]
-    df_results = pd.DataFrame(results)
-
-    st.subheader("Full Results")
-    st.dataframe(df_results)
-
-    filtered = df_results[
-        (df_results['Volatility (%)'] <= VOLATILITY_THRESHOLD) &
-        (df_results['CAGR (%)'] >= MIN_CAGR) &
-        (df_results['P/E Ratio'] >= PE_RANGE[0]) &
-        (df_results['P/E Ratio'] <= PE_RANGE[1])
-    ].sort_values(by='CAGR (%)', ascending=False)
-
-    st.subheader("Filtered (Steady Performers)")
-    st.dataframe(filtered)
-
-    st.download_button("Download CSV", df_results.to_csv(index=False), file_name="stock_analysis.csv")
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
